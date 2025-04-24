@@ -59,6 +59,19 @@ var abi = [
 		"type": "function"
 	  },
 	  {
+		"inputs": [],
+		"name": "getAllUsers",
+		"outputs": [
+		  {
+			"internalType": "address[]",
+			"name": "",
+			"type": "address[]"
+		  }
+		],
+		"stateMutability": "view",
+		"type": "function"
+	  },
+	  {
 		"inputs": [
 		  {
 			"internalType": "address",
@@ -75,13 +88,51 @@ var abi = [
 		"outputs": [
 		  {
 			"internalType": "uint32",
-			"name": "ret",
+			"name": "",
 			"type": "uint32"
 		  }
 		],
 		"stateMutability": "view",
 		"type": "function"
-	}
+	  },
+	  {
+		"inputs": [
+		  {
+			"internalType": "uint256",
+			"name": "",
+			"type": "uint256"
+		  }
+		],
+		"name": "userList",
+		"outputs": [
+		  {
+			"internalType": "address",
+			"name": "",
+			"type": "address"
+		  }
+		],
+		"stateMutability": "view",
+		"type": "function"
+	  },
+	  {
+		"inputs": [
+		  {
+			"internalType": "address",
+			"name": "",
+			"type": "address"
+		  }
+		],
+		"name": "users",
+		"outputs": [
+		  {
+			"internalType": "bool",
+			"name": "",
+			"type": "bool"
+		  }
+		],
+		"stateMutability": "view",
+		"type": "function"
+	  }
 ]; // FIXME: fill this in with your contract's ABI //Be sure to only have one array, not two
 // ============================================================
 abiDecoder.addABI(abi);
@@ -97,165 +148,113 @@ var BlockchainSplitwise = new ethers.Contract(contractAddress, abi, provider.get
 // =============================================================================
 
 // TODO: Add any helper functions here!
-async function getNeighbors(user){
-	// Retrieve all function calls to the "add_IOU" function
-	const functionCalls = await getAllFunctionCalls(contractAddress, "add_IOU");
-
-	// Initialize a Set to store unique neighbors
-	const neighbors = new Set();
-
-	// Iterate through the function calls
-	for (let call of functionCalls){
-		// Check if the user is the debtor (sender)
-		if (call.from.toLowerCase() === user.toLowerCase()) {
-			// Add the recipient (creditor) to the Set
-			neighbors.add(call.args[0].toLowerCase());
-		}
-	}
-	// a "neighbor" is defined as any user who has received an IOU from the given user
+async function getNeighbors(user) {
+    // init empty set for neighbors 
+	var neighbors = new Set();
+	// get all available users and loop
+	var users = await getUsers(); 
+	for (let i = 0; i < users.length; i++) { 
+		// check if there is an edge connecting passed in user to i-th user 
+		var owed = await BlockchainSplitwise.lookup(user.toLowerCase(), users[i]);
+		// add if non-zero (thus there is edge)
+		if (owed > 0) neighbors.add(users[i]);
+	} // return as array 
 	return Array.from(neighbors);
 }
+
 // TODO: Return a list of all users (creditors or debtors) in the system
-// All users in the system are everyone who has ever sent or received an IOU
 async function getUsers() {
-	// Retrive all function calls to the "add_IOU" function or retrives all transactions that called the add_IOU function on the smart contract
-	const functionCalls = await getAllFunctionCalls(contractAddress, "add_IOU");
-
-	// Use a Set to store unique users
-	const users = new Set();
-
-	// Iterate through the function calls
-	for (let call of functionCalls){
-		// Add the sender (debtor) to the Set
-		users.add(call.from.toLowerCase());
-
-		// Add the recipient (creditor) to the Set
-		users.add(call.args[0].toLowerCase());
-
-	}
-	// Convert the Set to an array and return it
-	return Array.from(users);
+    try {
+        const users = await BlockchainSplitwise.getAllUsers();
+        return users.map((user) => user.toLowerCase());
+    } catch (error) {
+        console.error("Error fetching users:", error);
+        return [];
+    }
 }
 
 // TODO: Get the total amount owed by the user specified by 'user'
 async function getTotalOwed(user) {
-	// Retrieve all function calls to the "add_IOU" function
-	const functionCalls = await getAllFunctionCalls(contractAddress, "add_IOU");
+    let owed = 0;
+    const users = await getUsers();
+    const signer = provider.getSigner(defaultAccount);
 
-	// Initialize a variable to store the total amount owed
-	let totalOwed = 0;
+    // Use Promise.all to resolve all lookup calls
+    const amounts = await Promise.all(
+        users.map(async (otherUser) => {
+            return await BlockchainSplitwise.connect(signer).lookup(user.toLowerCase(), otherUser);
+        })
+    );
 
-	// Iterate through the function calls
-	for (let call of functionCalls){
-		// Check if the user is the debtor (sender)
-		if (call.from.toLowerCase() === user.toLowerCase()) {
-			totalOwed += parseInt(call.args[1]); 
-		}
-	}
-	return totalOwed;
+    // Sum up all the amounts
+    owed = amounts.reduce((total, amount) => total + parseInt(amount, 10), 0);
+
+    return owed;
 }
-
 // TODO: Get the last time this user has sent or received an IOU, in seconds since Jan. 1, 1970
-// Return null if you can't find any activity for the user.
-// HINT: Try looking at the way 'getAllFunctionCalls' is written. You can modify it if you'd like.
 async function getLastActive(user) {
-	// Retrieve all function calls to the "add_IOU" function
-	const functionCalls = await getAllFunctionCalls(contractAddress, "add_IOU");
-
-	// Initialize a variable to store the last active time
-	let lastActiveTime = null;
-
-	// Iterate through the function calls
-	for (let call of functionCalls){
-		// Check if the user is involved in the transaction
-		if (call.from.toLowerCase() === user.toLowerCase() || call.args[0].toLowerCase() === user.toLowerCase()) {
-			// Update the last active time if it's more recent
-			if (lastActiveTime === null || call.t > lastActiveTime) {
-				lastActiveTime = call.t;
-			}
-		}
-	}
-	return lastActiveTime;
+    const functionCalls = await getAllFunctionCalls(contractAddress, "add_IOU");
+    let lastActiveTime = null;
+    for (const call of functionCalls) {
+        if (call.from.toLowerCase() === user.toLowerCase() || call.args[0].toLowerCase() === user.toLowerCase()) {
+            if (lastActiveTime === null || call.t > lastActiveTime) {
+                lastActiveTime = call.t;
+            }
+        }
+    }
+    return lastActiveTime;
 }
 
 // TODO: add an IOU ('I owe you') to the system
-// The person you owe money is passed as 'creditor'
-// The amount you owe them is passed as 'amount'
 async function add_IOU(creditor, amount) {
-
-	// get signer (aka debtor in this case)
-	var debtor = provider.getSigner(defaultAccount);
-	debtor = debtor._address; 
-	// check for path from creditor to debtor (as this would yield a cycle)
-	var path = await doBFS(creditor, debtor, getNeighbors);
-	// if no path exists, we can just pass in an empty array 
-	if (path == null) {
-		path = Array(); 
-	}
-	await BlockchainSplitwise.connect(provider.getSigner(defaultAccount)).add_IOU(creditor, amount, path);
-	
+    const debtor = provider.getSigner(defaultAccount)._address;
+    const path = await doBFS(creditor, debtor, getNeighbors) || [];
+    await BlockchainSplitwise.connect(provider.getSigner(defaultAccount)).add_IOU(creditor, amount, path);
 }
+
 // =============================================================================
 //                              Provided Functions
 // =============================================================================
-// Reading and understanding these should help you implement the above
-
-// This searches the block history for all calls to 'functionName' (string) on the 'addressOfContract' (string) contract
-// It returns an array of objects, one for each call, containing the sender ('from'), arguments ('args'), and the timestamp ('t')
 async function getAllFunctionCalls(addressOfContract, functionName) {
-	var curBlock = await provider.getBlockNumber(); // fetch the current block number 
-	var function_calls = []; // store the details of blocks -  contains sender (from), arguments (args) and the timestamp (t)
-
-	while (curBlock !== GENESIS) { // iterates through the blockchain, starting from the lastest block + moving backward to the genesis block
-	  var b = await provider.getBlockWithTransactions(curBlock); // fetch all transactions in the current block
-	  var txns = b.transactions;
-	  for (var j = 0; j < txns.length; j++) {
-	  	var txn = txns[j];
-
-	  	// check that destination of txn is our contract
-			if(txn.to == null){continue;} // filter transactions that are sent to the target smart contract 
-	  	if (txn.to.toLowerCase() === addressOfContract.toLowerCase()) {
-	  		var func_call = abiDecoder.decodeMethod(txn.data); // to identify the function being called and its arguments
-
-				// check that the function getting called in this txn is 'functionName' - check match the function name
-				if (func_call && func_call.name === functionName) {
-					var timeBlock = await provider.getBlock(curBlock); // fetch the block details
-		  		var args = func_call.params.map(function (x) {return x.value});
-	  			function_calls.push({
-	  				from: txn.from.toLowerCase(), // the address of the sender (debtor), who initiated the transaction
-	  				args: args, // the address of creditor and the amount
-						t: timeBlock.timestamp // timestamp of the block
-	  			})
-	  		}
-	  	}
-	  }
-	  curBlock = b.parentHash; // moves to the parent block + repeats the process until it reaches the genesis block
-	}
-	return function_calls; // contain all matching function calls
+    let curBlock = await provider.getBlockNumber();
+    const function_calls = [];
+    while (curBlock !== GENESIS) {
+        const b = await provider.getBlockWithTransactions(curBlock);
+        const txns = b.transactions;
+        for (const txn of txns) {
+            if (txn.to === null || txn.to.toLowerCase() !== addressOfContract.toLowerCase()) continue;
+            const func_call = abiDecoder.decodeMethod(txn.data);
+            if (func_call && func_call.name === functionName) {
+                const timeBlock = await provider.getBlock(curBlock);
+                const args = func_call.params.map((x) => x.value);
+                function_calls.push({ from: txn.from.toLowerCase(), args, t: timeBlock.timestamp });
+            }
+        }
+        curBlock = b.parentHash;
+    }
+    return function_calls;
 }
 
-// find chains of IOUs connecting 2 users + Optimize debt settlement - if a chain of IOUs exists, the DApp could suggest ways to settle debts more effectively by reducing intermediate transactions
-// We've provided a breadth-first search implementation for you, if that's useful
-// It will find a path from start to end (or return null if none exists), find a pass between 2 nodes
-// You just need to pass in a function ('getNeighbors') that takes a node (string) and returns its neighbors (as an array)
-async function doBFS(start, end, getNeighbors) { // find a path from start node to end node
-	var queue = [[start]];
-	while (queue.length > 0) {
-		var cur = queue.shift(); // removes the first path from the queue and return the first path
-		// check if the last node in the current path is the end node
-		var lastNode = cur[cur.length-1]
-		if (lastNode.toLowerCase() === end.toString().toLowerCase()) {
-			return cur;
-		} else {
-			var neighbors = await getNeighbors(lastNode);// getNeighbors defines the graph structure by specifying how nodes are connected
-			for (var i = 0; i < neighbors.length; i++) {
-				queue.push(cur.concat([neighbors[i]]));
-			}
-		}
-	}
-	return null;
+async function doBFS(start, end, getNeighbors) {
+    const queue = [[start]];
+    const visited = new Set([start.toLowerCase()]);
+    while (queue.length > 0) {
+        const cur = queue.shift();
+        const lastNode = cur[cur.length - 1];
+        if (lastNode.toLowerCase() === end.toLowerCase()) {
+            return cur;
+        } else {
+            const neighbors = await getNeighbors(lastNode);
+            for (const neighbor of neighbors) {
+                if (!visited.has(neighbor.toLowerCase())) {
+                    visited.add(neighbor.toLowerCase());
+                    queue.push([...cur, neighbor]);
+                }
+            }
+        }
+    }
+    return null;
 }
-
 // =============================================================================
 //                                      UI
 // =============================================================================
@@ -344,41 +343,49 @@ function check(name, condition) { // a helper function that evaluates a test con
 
 // The main testing function that runs a series of tests to validate the DApp's functionality
 async function sanityCheck() {
-	console.log ("\nTEST", "Simplest possible test: only runs one add_IOU; uses all client functions: lookup, getTotalOwed, getUsers, getLastActive");
+	console.log("\nTEST:", "Simplest possible test: only runs one add_IOU; uses all client functions: lookup, getTotalOwed, getUsers, getLastActive");
 
-	var score = 0;
-
-	var accounts = await provider.listAccounts();
+	let score = 0;
+	const accounts = await provider.listAccounts(); // ethers.js provider
 	defaultAccount = accounts[0];
 
-	var users = await getUsers(); // ensure that the list of users is empty at the start
+	// 1. getUsers initially
+	let users = await getUsers();
 	score += check("getUsers() initially empty", users.length === 0);
 
-	var owed = await getTotalOwed(accounts[1]); //ensure that the total owed amount for a user is 0 before any IOUs are added
-	score += check("getTotalOwed(0) initially empty", owed === 0);
+	// 2. getTotalOwed initially
+	let owed = await getTotalOwed(accounts[1]);
+	score += check("getTotalOwed(1) initially 0", owed === 0);
 
-	var lookup_0_1 = await BlockchainSplitwise.lookup(accounts[0], accounts[1]);
-	console.log("lookup(0, 1) current value" + lookup_0_1);
+	// 3. lookup(0,1)
+	let lookup_0_1 = await BlockchainSplitwise.lookup(accounts[0], accounts[1]);
+	console.log("lookup(0,1) current value", lookup_0_1);
 	score += check("lookup(0,1) initially 0", parseInt(lookup_0_1, 10) === 0);
 
-	var response = await add_IOU(accounts[1], "10"); // ass an IOU of 10 from acocunts[0] to accounts[1]
+	//4. Call add_IOU
+	await add_IOU(accounts[1], 10); // This function should wrap contract call and set last active
 
-	users = await getUsers();// ensure that the list of users now contains 2 users (one debtor and one creditor) after adding an IOU
+	// 5. Check getUsers again
+	users = await getUsers();
+	console.log("has length %d", users.length);
 	score += check("getUsers() now length 2", users.length === 2);
 
-	owed = await getTotalOwed(accounts[0]); // Ensures that the total owed amount for accounts[0] is 10 now
+	// 6. getTotalOwed(0)
+	owed = await getTotalOwed(accounts[0]);
 	score += check("getTotalOwed(0) now 10", owed === 10);
 
+	// 7. lookup(0,1)
 	lookup_0_1 = await BlockchainSplitwise.lookup(accounts[0], accounts[1]);
 	score += check("lookup(0,1) now 10", parseInt(lookup_0_1, 10) === 10);
 
-	// ensures that the last active time for accounts[0] is within the last 60 seconds
-	var timeLastActive = await getLastActive(accounts[0]);
-	var timeNow = Date.now()/1000;
-	var difference = timeNow - timeLastActive;
-	score += check("getLastActive(0) works", difference <= 60 && difference >= -3); // -3 to 60 seconds
+	// 8. getLastActive(0)
+	const timeLastActive = await getLastActive(accounts[0]);
+	const timeNow = Date.now() / 1000;
+	const difference = timeNow - timeLastActive;
+	score += check("getLastActive(0) works", difference <= 60 && difference >= -3); // -3 to 60 sec window
 
-	console.log("Final Score: " + score +"/21");
+	console.log("Final Score:", score, "/21");
 }
 
-sanityCheck() //Uncomment this line to run the sanity check when you first open index.html
+
+//sanityCheck() //Uncomment this line to run the sanity check when you first open index.html
